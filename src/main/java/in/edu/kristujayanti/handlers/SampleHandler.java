@@ -19,7 +19,10 @@ public class SampleHandler extends AbstractVerticle {
 
         router.post("/usersign").handler(smp::usersign);
         router.post("/userlog").handler(smp::userlog);
-
+        router.post("/resetpass").handler(smp::resetpass);
+        router.post("/task").handler(smp::crttask);
+        router.patch("/task").handler(smp::edittask);
+        router.delete("/task").handler(smp::deltask);
 
 
 

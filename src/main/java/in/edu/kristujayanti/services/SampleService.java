@@ -15,6 +15,7 @@ import com.mongodb.client.model.Updates;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.InsertOneResult;
 import com.mongodb.client.result.UpdateResult;
+import in.edu.kristujayanti.JwtUtil;
 import in.edu.kristujayanti.secretclass;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServer;
@@ -34,15 +35,21 @@ import org.bson.conversions.Bson;
 import com.google.zxing.qrcode.QRCodeWriter;
 import redis.clients.jedis.Jedis;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+
+import javax.crypto.spec.PSource;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 public class SampleService {
+    JwtUtil jtil=new JwtUtil();
     Jedis jedis = new Jedis("localhost", 6379);
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     secretclass srt=new secretclass();
@@ -68,6 +75,7 @@ public class SampleService {
             ctx.response().write("Email already registered");
         }
         else {
+
             ctx.response().write("Password has been sent to your Email\n" + "Login using the password that has been sent");
             String pwd = generateID(8);
             sendemail(pwd, user);
@@ -100,6 +108,11 @@ public class SampleService {
             if (dbuser.equals(user)) {
                 if (verifyPassword(pwd,dbpass)) {
                     status = "Login was successfull";
+                    String token = jtil.generateToken(user);
+
+                    jedis.setex("jwt:" + user,600,token);
+                    ctx.response().write("your auto generated jwt token is: "+token);
+                    break;
                 } else {
                     status = "Password is Incorrect";
                 }
@@ -107,13 +120,16 @@ public class SampleService {
                 status = "Invalid Login Credentials";
             }
         }
-        ctx.response().write(status + "\n");
-        ctx.response().write("These are the Available events:" + "\n");
-        Bson projection = Projections.fields(Projections.exclude("_id","tokens"));
-        for (Document doc : tasks.find().projection(projection)) {
-            jarr.add(new JsonObject(doc.toJson()));
-        }
+        ctx.response().write("\n"+ status + "\n");
+        if(status.equals("Login was successfull")) {
 
+            ctx.response().write("These are the Available events:" + "\n");
+            Bson filter=Filters.eq("email",user);
+            Bson projection = Projections.fields(Projections.exclude("_id"));
+            for (Document doc : tasks.find().projection(projection).filter(filter)) {
+                jarr.add(new JsonObject(doc.toJson()));
+            }
+        }
         ctx.response().end(jarr.encodePrettily());
 
     }
@@ -155,17 +171,160 @@ public class SampleService {
         ctx.response().end();
         return set;
     }
+    public void crttask(RoutingContext ctx){
+        ctx.response().setChunked(true);
+        String authHeader = ctx.request().getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            ctx.response().setStatusCode(401).end("Missing or invalid Authorization header");
+            return;
+        }
+        String token = authHeader.replace("Bearer ", "");
 
+        // Step 3: Validate token using JwtUtil
+        JwtUtil jwtUtil = new JwtUtil();
+        String email = jwtUtil.extractEmail(token);
+        System.out.println("extracted email: "+email);
+        if (email == null || !jwtUtil.isTokenValid(token)) {
+            ctx.response().setStatusCode(401).end("Invalid or expired token");
+            return;
+        }
+        String jedtoken= jedis.get("jwt:"+email);
+        System.out.println("Extracted jedtoken: "+jedtoken);
+        if(jedtoken!=null&&jedtoken.equals(token)) {
+            JsonObject employee = ctx.getBodyAsJson();
+            if (employee == null
+                    || !employee.containsKey("name")
+                    || !employee.containsKey("date")
+                    || !employee.containsKey("time")
+                    || !employee.containsKey("priority")
+                    || !employee.containsKey("status")) {
 
-    public static BufferedImage generateqr(String token)throws WriterException {
-        int width=300;
-        int height=300;
-        QRCodeWriter qrCodeWriter = new QRCodeWriter();
-        Map<EncodeHintType, Object> hints = Map.of(EncodeHintType.CHARACTER_SET, "UTF-8");
+                ctx.response()
+                        .setStatusCode(400)
+                        .putHeader("Content", "application/json")
+                        .end(new JsonObject()
+                                .put("error", "'name', 'due date', 'time', 'priority', and 'status' are required")
+                                .encode());
 
-        BitMatrix bitMatrix = qrCodeWriter.encode(token, BarcodeFormat.QR_CODE, width, height, hints);
-        return MatrixToImageWriter.toBufferedImage(bitMatrix);
+            } else {
+                String name = employee.getString("name");
+                String date=employee.getString("date");
+                String time=employee.getString("time");
+//                LocalDate date = LocalDate.parse(employee.getString("date")); // "2025-07-02"
+//                LocalTime time = LocalTime.parse(employee.getString("time")); // "15:30:00"
+                String pri = employee.getString("priority");
+                String status = employee.getString("status");
+                Document doc = new Document("email",email).append("name", name).append("date", date).append("time", time).append("priority", pri).append("status", status);
+                InsertOneResult ins = tasks.insertOne(doc);
+                ctx.response().end("Values Inserted");
+            }
+        }else{
+            ctx.response().end("Token invalid/expired or Mismatched");
+        }
     }
+
+    public void edittask(RoutingContext ctx){
+        ctx.response().setChunked(true);
+        String authHeader = ctx.request().getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            ctx.response().setStatusCode(401).end("Missing or invalid Authorization header");
+            return;
+        }
+        String token = authHeader.replace("Bearer ", "");
+
+        // Step 3: Validate token using JwtUtil
+        JwtUtil jwtUtil = new JwtUtil();
+        String email = jwtUtil.extractEmail(token);
+        System.out.println("extracted email: "+email);
+        if (email == null || !jwtUtil.isTokenValid(token)) {
+            ctx.response().setStatusCode(401).end("Invalid or expired token");
+            return;
+        }
+        String jedtoken= jedis.get("jwt:"+email);
+        System.out.println("Extracted jedtoken: "+jedtoken);
+        if(jedtoken!=null&&jedtoken.equals(token)) {
+            String name=ctx.request().getParam("name");
+            String date=ctx.request().getParam("date");
+            String time=ctx.request().getParam("time");
+            String pri=ctx.request().getParam("priority");
+            String status=ctx.request().getParam("status");
+//            if(name!=null){
+//                Bson filter2 = Filters.and( Filters.eq("email",email),Filters.eq("name",name));
+//                Bson update2 = Updates.set("name", name);
+//                UpdateResult result2 = tasks.updateOne(filter2, update2);
+//                if(result2.getModifiedCount()!=0){
+//                    ctx.response().end("Updated Succesfully");
+//                }
+//            }
+            if(date!=null){
+                Bson filter2 = Filters.and( Filters.eq("email",email),Filters.eq("name",name));
+                Bson update2 = Updates.set("date", date);
+                UpdateResult result2 = tasks.updateOne(filter2, update2);
+                if(result2.getModifiedCount()!=0){
+                    ctx.response().end("Updated Succesfully");
+                }
+            }
+            else if(time!=null){
+                Bson filter2 = Filters.and( Filters.eq("email",email),Filters.eq("name",name));
+                Bson update2 = Updates.set("time", time);
+                UpdateResult result2 = tasks.updateOne(filter2, update2);
+                if(result2.getModifiedCount()!=0){
+                    ctx.response().end("Updated Succesfully");
+                }
+            }
+            else if(pri!=null){
+                Bson filter2 = Filters.and( Filters.eq("email",email),Filters.eq("name",name));
+                Bson update2 = Updates.set("priority", pri);
+                UpdateResult result2 = tasks.updateOne(filter2, update2);
+                if(result2.getModifiedCount()!=0){
+                    ctx.response().end("Updated Succesfully");
+                }
+            }
+            else if(status!=null){
+                Bson filter2 = Filters.and( Filters.eq("email",email),Filters.eq("name",name));
+                Bson update2 = Updates.set("status", status);
+                UpdateResult result2 = tasks.updateOne(filter2, update2);
+                if(result2.getModifiedCount()!=0){
+                    ctx.response().end("Updated Succesfully");
+                }
+            }
+        }
+    }
+
+    public void deltask(RoutingContext ctx){
+        ctx.response().setChunked(true);
+        String authHeader = ctx.request().getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            ctx.response().setStatusCode(401).end("Missing or invalid Authorization header");
+            return;
+        }
+        String token = authHeader.replace("Bearer ", "");
+
+        // Step 3: Validate token using JwtUtil
+        JwtUtil jwtUtil = new JwtUtil();
+        String email = jwtUtil.extractEmail(token);
+        System.out.println("extracted email: "+email);
+        if (email == null || !jwtUtil.isTokenValid(token)) {
+            ctx.response().setStatusCode(401).end("Invalid or expired token");
+            return;
+        }
+        String jedtoken= jedis.get("jwt:"+email);
+        System.out.println("Extracted jedtoken: "+jedtoken);
+        if(jedtoken!=null&&jedtoken.equals(token)) {
+            String name = ctx.request().getParam("name");
+            Bson filter2 = Filters.and(Filters.eq("email", email), Filters.eq("name", name));
+            DeleteResult del = tasks.deleteOne(filter2);
+            if (del.wasAcknowledged()) {
+                ctx.response().end("Deleted Succesfully");
+
+            }
+        }
+    }
+
+
+
+
+
 
 //    public String hashit (String pass) {
 //
