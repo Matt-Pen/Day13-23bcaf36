@@ -321,6 +321,39 @@ public class SampleService {
         }
     }
 
+    public void viewtask(RoutingContext ctx){
+        ctx.response().setChunked(true);
+        String authHeader = ctx.request().getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            ctx.response().setStatusCode(401).end("Missing or invalid Authorization header");
+            return;
+        }
+        String token = authHeader.replace("Bearer ", "");
+
+        // Step 3: Validate token using JwtUtil
+        JwtUtil jwtUtil = new JwtUtil();
+        String email = jwtUtil.extractEmail(token);
+        System.out.println("extracted email: "+email);
+        if (email == null || !jwtUtil.isTokenValid(token)) {
+            ctx.response().setStatusCode(401).end("Invalid or expired token");
+            return;
+        }
+        String jedtoken= jedis.get("jwt:"+email);
+        System.out.println("Extracted jedtoken: "+jedtoken);
+        JsonArray jarr = new JsonArray();
+        if(jedtoken!=null&&jedtoken.equals(token)) {
+            ctx.response().write("These are the Available events:" + "\n");
+            Bson filter=Filters.eq("email",email);
+            Bson projection = Projections.fields(Projections.exclude("_id"));
+            for (Document doc : tasks.find().projection(projection).filter(filter)) {
+                jarr.add(new JsonObject(doc.toJson()));
+            }
+
+            ctx.response().end(jarr.encodePrettily());
+
+        }
+    }
+
 
 
 

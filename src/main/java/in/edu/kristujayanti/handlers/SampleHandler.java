@@ -23,6 +23,7 @@ public class SampleHandler extends AbstractVerticle {
         router.post("/task").handler(smp::crttask);
         router.patch("/task").handler(smp::edittask);
         router.delete("/task").handler(smp::deltask);
+        router.get("/task").handler(smp::viewtask);
 
 
 
